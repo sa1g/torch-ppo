@@ -156,7 +156,7 @@ class Model:
         
         # PPO Hyperparamters:
         policy_clip = 0.2
-        c1 = 0.5
+        c1 = 1
         c2 = 0.01
 
         new_policy_act, new_policy_prob, new_vf_reward = [], [], []
@@ -238,10 +238,10 @@ class Model:
         ## THIS IS DIFFERENT
 
         # 7.1 Policy
-        self.actor.optimizer.zero_grad()
-        actor_loss = -(policy_loss + c2*entropy)
-        actor_loss.backward(retain_graph=True)
-        self.actor.optimizer.step()
+        # self.actor.optimizer.zero_grad()
+        # actor_loss = -(policy_loss + c2*entropy)
+        # actor_loss.backward(retain_graph=True)
+        # self.actor.optimizer.step()
 
         # 7.2 Value Function
         self.critic.optimizer.zero_grad()
@@ -326,6 +326,8 @@ def batch_and_train(env):
     plt.plot(score, color='gray', linewidth=1, label='score')
     plt.plot(avg_score, color='blue', linewidth=3, label='average score')
     plt.scatter(np.arange(score.shape[0]), score, color='green', linewidth=0.3)
+    plt.title('Reward', fontdict=None, loc='center', pad=None)
+
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_reward.png")
@@ -339,14 +341,16 @@ def batch_and_train(env):
     plt.plot(policy_loss, color='red', label='policy loss', linewidth=1)
     plt.plot(vf_loss, color='blue', label='vf loss', linewidth=1)
     plt.plot(entropy, color='magenta', label='entropy', linewidth=1)
+    plt.title('Total Losses', fontdict=None, loc='center', pad=None)
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_loss.png")
-
+    
     plt.figure(figsize=(15, 7))
-    plt.ylabel("Episodic loss", fontsize=12)
+    plt.ylabel("Policy loss", fontsize=12)
     plt.xlabel("Training Episodes", fontsize=12)
     plt.plot(policy_loss, color='red', label='policy loss', linewidth=1)
+    plt.title('Policy loss', fontdict=None, loc='center', pad=None)
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_policy_loss.png")
@@ -355,9 +359,9 @@ if __name__ == '__main__':
     env = gym.make('CartPole-v1')
 
     # Seeding for reproducibility
-    torch.manual_seed(0)
-    random.seed(0)
-    np.random.seed(0)
-    env.seed(0)
+    # torch.manual_seed(0)
+    # random.seed(0)
+    # np.random.seed(0)
+    # env.seed(0)
 
     batch_and_train(env=env)
