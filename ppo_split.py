@@ -22,10 +22,7 @@ def running_average(x, n):
         y[i] /= N
     return y
 
-# Actor-Critic network
-# also called Policy-ValueFunction network
-# by -E
-class Model(nn.Module):
+class Actor(nn.Module):
     """
     Actor-Critic model, also known as Policy-Value Function network
     """
@@ -46,6 +43,58 @@ class Model(nn.Module):
         # Actor
         self.actor0 = nn.Linear(32, self.action_dim)
 
+        # # Critic
+        # self.critic = nn.Linear(32, 1)
+
+        self.optimizer = torch.optim.Adam(self.parameters(),
+                                          lr=self.learning_rate)
+
+    def forward(self, observation):
+        """
+        Returns policy_probs, vf_reward
+        """
+        # Forward OBS into every layer
+        x = torch.tensor(observation)
+        x = self.linear1(x)
+        x = self.relu1(x)
+        x = self.linear2(x)
+        x = self.relu2(x)
+
+        # Get policy_prob
+        policy_probs = self.actor0(x)
+
+        # FIXME: this type of softmax is slow and doesnt scale well.
+        return torch.nn.functional.softmax(policy_probs, dim=-1)
+
+    def predict(self, observation):
+        """
+        Returns policy_act, policy_probs, vf_reward
+        """
+        policy_probs = self.forward(observation=observation)
+
+        policy_act = np.random.choice(np.arange(self.action_dim),
+                                      p=policy_probs.detach().numpy())
+
+        return policy_act, policy_probs
+
+class Critic(nn.Module):
+    """
+    Actor-Critic model, also known as Policy-Value Function network
+    """
+
+    def __init__(self, state_dim, action_dim, learning_rate=0.0003):
+        super().__init__()
+        # Set values
+        self.state_dim = torch.tensor(state_dim)
+        self.action_dim = torch.tensor(action_dim)
+        self.learning_rate = learning_rate
+
+        # Common NN layers
+        self.linear1 = nn.Linear(self.state_dim, 64)
+        self.relu1 = nn.ReLU()
+        self.linear2 = nn.Linear(64, 32)
+        self.relu2 = nn.ReLU()
+
         # Critic
         self.critic = nn.Linear(32, 1)
 
@@ -63,28 +112,30 @@ class Model(nn.Module):
         x = self.linear2(x)
         x = self.relu2(x)
 
-        # Get policy_prob
-
-        policy_probs = self.actor0(x)
-
         # Get vf_reward
         vf_reward = self.critic(x)
 
         # FIXME: this type of softmax is slow and doesnt scale well.
-        return torch.nn.functional.softmax(policy_probs, dim=-1), vf_reward
+        return vf_reward
 
     def predict(self, observation):
         """
         Returns policy_act, policy_probs, vf_reward
         """
-        policy_probs, vf_reward = self.forward(observation=observation)
+        vf_reward = self.forward(observation=observation)
 
-        policy_act = np.random.choice(np.arange(self.action_dim),
-                                      p=policy_probs.detach().numpy())
-        # policy_act = np.random.choice(np.array(list(range(env.action_space.n))), p=policy_probs.detach().numpy())
+        return vf_reward
 
+class Model:
+    def __init__(self, state_dim, action_dim):
+        self.actor = Actor(state_dim=state_dim, action_dim=action_dim)
+        self.critic = Critic(state_dim=state_dim, action_dim=action_dim)
+
+    def predict(self, observation):
+        policy_act, policy_probs = self.actor.predict(observation=observation)
+        vf_reward = self.critic.predict(observation=observation)
         return policy_act, policy_probs, vf_reward
-    
+
     def safe_ratio(self, num, den):
         """
         Returns 0 if nan, else value
@@ -184,9 +235,18 @@ class Model(nn.Module):
             print(total_loss.item())
 
         # 7. Backpropagation
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
+        ## THIS IS DIFFERENT
+
+        # 7.1 Policy
+        self.actor.optimizer.zero_grad()
+        actor_loss = -(policy_loss + c2*entropy)
+        actor_loss.backward(retain_graph=True)
+        self.actor.optimizer.step()
+
+        # 7.2 Value Function
+        self.critic.optimizer.zero_grad()
+        vf_loss.backward()
+        self.critic.optimizer.step()
 
         return total_loss, policy_loss, vf_loss, entropy
 
@@ -282,7 +342,7 @@ def batch_and_train(env):
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_loss.png")
-    
+
     plt.figure(figsize=(15, 7))
     plt.ylabel("Episodic loss", fontsize=12)
     plt.xlabel("Training Episodes", fontsize=12)
@@ -290,7 +350,7 @@ def batch_and_train(env):
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_policy_loss.png")
-    
+
 if __name__ == '__main__':
     env = gym.make('CartPole-v1')
 
