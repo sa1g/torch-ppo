@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+
 
 def running_average(x, n):
     N = n
@@ -21,6 +23,7 @@ def running_average(x, n):
         y[i] = kernel @ x[i:i + N]  # matrix multiplication operator: np.mul
         y[i] /= N
     return y
+
 
 # Actor-Critic network
 # also called Policy-ValueFunction network
@@ -84,111 +87,146 @@ class Model(nn.Module):
         # policy_act = np.random.choice(np.array(list(range(env.action_space.n))), p=policy_probs.detach().numpy())
 
         return policy_act, policy_probs, vf_reward
-    
+
+    def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Evaluate actoins according to the current policy,
+        given the observations.
+
+        AT THE MOMENT ONLY FOR CATEGORICAL DISTRIBUTIONS!
+
+        Args:
+            obs: observation
+            actions: actions
+
+        Return:
+            eestimated value, log likelihood fo taking those actions and entropy of the action distribution.
+        
+        Inspired by https://github.com/DLR-RM/stable-baselines3/blob/9aff1137a9e2efef8f6174ac6faeb8af7e173b64/stable_baselines3/common/policies.py#L671
+        """
+        # Preprocess the observation if needed
+        latent_pi, values = self.forward(observation=obs)
+        distribution = torch.distributions.Categorical(latent_pi)
+        log_prob = distribution.log_prob(actions)
+        entropy = distribution.entropy()
+
+        return values, log_prob, entropy
+
+
     def safe_ratio(self, num, den):
         """
         Returns 0 if nan, else value
 
         -G
         """
-        return num/(den+1e-10) * (torch.abs(den)>0)
+        return num / (den + 1e-10) * (torch.abs(den) > 0)
 
-    def learn(self, observation, policy_act, policy_prob, vf_reward, reward, iteration):
+
+def learn(self, observation, policy_act, policy_prob, vf_reward, reward,
+              iteration, batch_size):
         """
         GAE + PPO LOSS w/clip, entropy and vf_loss;
         entropy is with mean, not sum bf of different batch sizes.
         """
-
-        # GAE Constants:
-        gae_gamma = 0.99
-        gae_lambda = 0.95
+        approx_kl_divs = []
         
-        # PPO Hyperparamters:
-        policy_clip = 0.2
-        c1 = 0.5
-        c2 = 0.01
+        # Do a complete pass on the rollout buffer (batch)
 
-        new_policy_act, new_policy_prob, new_vf_reward = [], [], []
+        # # GAE Constants:
+        # gae_gamma = 0.99
+        # gae_lambda = 0.95
 
-        # 1. Get new policy FORWARD results
-        for obs in observation:
-            pa, pp, vfr = self.predict(observation=torch.tensor(obs))
-            new_policy_act.append(pa)
-            new_policy_prob.append(pp)
-            new_vf_reward.append(vfr)
+        # # PPO Hyperparamters:
+        # policy_clip = 0.2
+        # c1 = 1
+        # c2 = 0.01
 
-        # 2. Calculate GAE
-        deltas = [
-            r + gae_gamma * nv - v
-            for r, nv, v in zip(reward, new_vf_reward, vf_reward )
-        ]
+        # new_policy_act, new_policy_prob, new_vf_reward = [], [], []
 
-        deltas_len = len(deltas)
-        deltas = torch.stack(deltas)
+        # # 1. Get new policy FORWARD results
+        # for obs in observation:
+        #     pa, pp, vfr = self.predict(observation=torch.tensor(obs))
+        #     new_policy_act.append(pa)
+        #     new_policy_prob.append(pp)
+        #     new_vf_reward.append(vfr)
 
-        for t in reversed(range(deltas_len -1)):
-            deltas[t] = deltas[t] + gae_gamma * gae_lambda * deltas[t+1]
+        # # 2. Calculate GAE
+        # deltas = [
+        #     r + gae_gamma * nv - v
+        #     for r, nv, v in zip(reward, new_vf_reward, vf_reward)
+        # ]
 
-        notnormalized_deltas = torch.squeeze(deltas)
+        # deltas_len = len(deltas)
+        # deltas = torch.stack(deltas)
 
-            # 2.1 Normalize GAE, returns advantage
-        deltas = (deltas - deltas.mean()) / (deltas.std() + 1e-8)
-        advantage = torch.squeeze(deltas)
+        # for t in reversed(range(deltas_len - 1)):
+        #     deltas[t] = deltas[t] + gae_gamma * gae_lambda * deltas[t + 1]
 
-        # 3. Policy loss
+        # notnormalized_deltas = torch.squeeze(deltas)
 
-        ## Get policy_prob and new_policy_prob for action taken in policy_act with policy_prob probabilities.
-        policy_a = []
-        new_policy_a = []
-        for policy, new_policy, action in zip(policy_prob, new_policy_prob, policy_act):
-            """
-            We don't have problems with action mask 'nones' because it's always the same, so it's impossibile
-            having a smth/0 or smth/-inf or smth like this.
-            """
-            policy_a.append(torch.squeeze(policy)[action])
-            new_policy_a.append(torch.squeeze(new_policy)[action])
-   
-        policy_prob = torch.tensor(policy_a)
-        new_policy_prob = torch.tensor(new_policy_a)
+        # # 2.1 Normalize GAE, returns advantage
+        # deltas = (deltas - deltas.mean()) / (deltas.std() + 1e-8)
+        # advantage = torch.squeeze(deltas)
 
-        ## Calculate probability ratio
-        ## PAPER: (6-)
-        prob_ratio = self.safe_ratio(new_policy_prob, policy_prob)
+        # # 3. Policy loss
 
-        ## Calcualte first argument of L_CLIP ( r_t(\theta)*\hat{A_t})
-        ## PAPER: (6) \hat{E_t} excluded
-        weighted_probs = advantage * prob_ratio
-        ## PAPER: (7) -> only clip part
-        weighted_clipped_probs = torch.clamp(prob_ratio, 1-policy_clip, 1+policy_clip)
-        ## PAPER: (7) L_CLIP
-        policy_loss = torch.min(weighted_probs, weighted_clipped_probs).mean()
+        # ## Get policy_prob and new_policy_prob for action taken in policy_act with policy_prob probabilities.
+        # policy_a = []
+        # new_policy_a = []
+        # for policy, new_policy, action in zip(policy_prob, new_policy_prob,
+        #                                       policy_act):
+        #     """
+        #     We don't have problems with action mask 'nones' because it's always the same, so it's impossibile
+        #     having a smth/0 or smth/-inf or smth like this.
+        #     """
+        #     policy_a.append(torch.squeeze(policy)[action])
+        #     new_policy_a.append(torch.squeeze(new_policy)[action])
 
-        # 4. Value function loss
-        ## PAPER: (9), L_t^{VF}
-        target = notnormalized_deltas + torch.tensor(vf_reward)
-        vf_loss = torch.nn.functional.mse_loss(target, torch.tensor(new_vf_reward))
+        # policy_prob = torch.tensor(policy_a)
+        # new_policy_prob = torch.tensor(new_policy_a)
 
-        # 5. Entropy
-        ## PAPER: (9), S_t
-        ## Shannon entropy where SUM -> MEAN so that it doesn't depend on "batch size"
-        ## FIXME: 1e-10 ?
-        entropy = -(new_policy_prob * torch.log(new_policy_prob + 1e-10))
-        entropy = torch.mean(entropy)
+        # ## Calculate probability ratio
+        # ## PAPER: (6-)
+        # prob_ratio = self.safe_ratio(new_policy_prob, policy_prob)
 
-        # 6. Total Loss
-        ## PAPER: (9)
-        ## Inverted sign because torch.optimizer.Adam is a SGD and we need a SGA, so if we invert the sign an SGD works correctly
-        total_loss = -(policy_loss - c1*vf_loss + c2*entropy)
-        
-        if iteration % 100 == 0:
-            print(total_loss.item())
+        # ## Calcualte first argument of L_CLIP ( r_t(\theta)*\hat{A_t})
+        # ## PAPER: (6) \hat{E_t} excluded
+        # weighted_probs = advantage * prob_ratio
+        # ## PAPER: (7) -> only clip part
+        # weighted_clipped_probs = torch.clamp(prob_ratio, 1 - policy_clip,
+        #                                      1 + policy_clip)
+        # ## PAPER: (7) L_CLIP
+        # policy_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
-        # 7. Backpropagation
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
+        # # 4. Value function loss
+        # ## PAPER: (9), L_t^{VF}
+        # # target = notnormalized_deltas + torch.tensor(vf_reward)
+        # # vf_loss = torch.nn.functional.mse_loss(target, torch.tensor(new_vf_reward))
+        # vf_loss = torch.nn.functional.mse_loss(torch.tensor(new_vf_reward),
+        #                                        torch.tensor(vf_reward))
 
-        return total_loss, policy_loss, vf_loss, entropy
+        # # 5. Entropy
+        # ## PAPER: (9), S_t
+        # ## Shannon entropy where SUM -> MEAN so that it doesn't depend on "batch size"
+        # ## FIXME: 1e-10 ?
+        # entropy = -(new_policy_prob * torch.log(new_policy_prob + 1e-10))
+        # entropy = torch.mean(entropy)
+
+        # # 6. Total Loss
+        # ## PAPER: (9)
+        # ## Inverted sign because torch.optimizer.Adam is a SGD and we need a SGA, so if we invert the sign an SGD works correctly
+        # total_loss = policy_loss + c1 * vf_loss + c2 * entropy
+
+        # if iteration % 100 == 0:
+        #     print(total_loss.item())
+
+        # # 7. Backpropagation
+        # self.optimizer.zero_grad()
+        # total_loss.backward()
+        # self.optimizer.step()
+
+        # return total_loss, policy_loss, vf_loss, entropy
+
 
 def batch_and_train(env):
     """
@@ -197,18 +235,18 @@ def batch_and_train(env):
     # Define model and constants
     model = Model(env.observation_space.shape[0], env.action_space.n)
     EPISODE_LENGTH = 300
-    MAX_EPISODES = 1000
+    MAX_EPISODES = 100
     VISUALIZE_STEP = 100
     score = []
 
-    total_loss, policy_loss, vf_loss, entropy = [],[],[],[]
+    total_loss, policy_loss, vf_loss, entropy = [], [], [], []
 
     for episode in range(MAX_EPISODES):
         # As these episodes are defined by each `done` we can actually run multiple episodes.
 
         obs = env.reset()
         done = False
-        
+
         mem_observation = []
         mem_policy_act = []
         mem_policy_prob = []
@@ -222,6 +260,7 @@ def batch_and_train(env):
             # Run the episode for max `EPISODE_LENGTH` steps and register its data in the `episode_memory`
             # if the episode is `done` the batch is interrupted (and training continues)
             policy_act, policy_prob, vf_reward = model.predict(obs)
+            print(policy_act)
             new_obs, rew, done, info = env.step(policy_act)
             episode_score += rew
 
@@ -237,17 +276,19 @@ def batch_and_train(env):
                 break
 
         score.append(episode_score)
-        
+
         # Training
-        total_los, policy_los, vf_los, entrop = model.learn(mem_observation, mem_policy_act, mem_policy_prob, mem_vf_reward, mem_reward, episode)
-            # inside model.learn do gae and other stuff.
+        total_los, policy_los, vf_los, entrop = model.learn(
+            mem_observation, mem_policy_act, mem_policy_prob, mem_vf_reward,
+            mem_reward, episode)
+        # inside model.learn do gae and other stuff.
 
         total_loss.append(total_los.item())
         policy_loss.append(policy_los.item())
         vf_loss.append(vf_los.item())
         entropy.append(entrop.item())
-        
-         # print the status after every VISUALIZE_STEP episodes
+
+        # print the status after every VISUALIZE_STEP episodes
         if episode % VISUALIZE_STEP == 0 and episode > 0:
             print('Episode {}\tAverage Score: {:.2f}'.format(
                 episode, np.mean(score[-VISUALIZE_STEP:-1])))
@@ -266,11 +307,11 @@ def batch_and_train(env):
     plt.plot(score, color='gray', linewidth=1, label='score')
     plt.plot(avg_score, color='blue', linewidth=3, label='average score')
     plt.scatter(np.arange(score.shape[0]), score, color='green', linewidth=0.3)
+    plt.title('Reward', fontdict=None, loc='center', pad=None)
+
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_reward.png")
-
-
 
     plt.figure(figsize=(15, 7))
     plt.ylabel("Episodic loss", fontsize=12)
@@ -279,18 +320,21 @@ def batch_and_train(env):
     plt.plot(policy_loss, color='red', label='policy loss', linewidth=1)
     plt.plot(vf_loss, color='blue', label='vf loss', linewidth=1)
     plt.plot(entropy, color='magenta', label='entropy', linewidth=1)
+    plt.title('Total Losses', fontdict=None, loc='center', pad=None)
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_loss.png")
-    
+
     plt.figure(figsize=(15, 7))
-    plt.ylabel("Episodic loss", fontsize=12)
+    plt.ylabel("Policy loss", fontsize=12)
     plt.xlabel("Training Episodes", fontsize=12)
     plt.plot(policy_loss, color='red', label='policy loss', linewidth=1)
+    plt.title('Policy loss', fontdict=None, loc='center', pad=None)
     plt.legend()
 
     plt.savefig(f"img/{EXPERIMENT_NAME}_policy_loss.png")
-    
+
+
 if __name__ == '__main__':
     env = gym.make('CartPole-v1')
 
