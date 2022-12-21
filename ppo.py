@@ -3,13 +3,24 @@ Temporary single file application
 """
 # Import modules
 from abc import ABC
+import datetime
 import random
 
 import gym
 import torch
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
 
+def running_average(x, n):
+    N = n
+    kernel = np.ones(N)
+    conv_len = x.shape[0] - N
+    y = np.zeros(conv_len)
+    for i in range(conv_len):
+        y[i] = kernel @ x[i:i + N]  # matrix multiplication operator: np.mul
+        y[i] /= N
+    return y
 
 # Actor-Critic network
 # also called Policy-ValueFunction network
@@ -177,6 +188,8 @@ class Model(nn.Module):
         total_loss.backward()
         self.optimizer.step()
 
+        return total_loss, policy_loss, vf_loss, entropy
+
 def batch_and_train(env):
     """
     Performs batching and training for each batch
@@ -184,9 +197,11 @@ def batch_and_train(env):
     # Define model and constants
     model = Model(env.observation_space.shape[0], env.action_space.n)
     EPISODE_LENGTH = 300
-    MAX_EPISODES = 5000
+    MAX_EPISODES = 1000
     VISUALIZE_STEP = 100
     score = []
+
+    total_loss, policy_loss, vf_loss, entropy = [],[],[],[]
 
     for episode in range(MAX_EPISODES):
         # As these episodes are defined by each `done` we can actually run multiple episodes.
@@ -224,9 +239,14 @@ def batch_and_train(env):
         score.append(episode_score)
         
         # Training
-        model.learn(mem_observation, mem_policy_act, mem_policy_prob, mem_vf_reward, mem_reward, episode)
+        total_los, policy_los, vf_los, entrop = model.learn(mem_observation, mem_policy_act, mem_policy_prob, mem_vf_reward, mem_reward, episode)
             # inside model.learn do gae and other stuff.
 
+        total_loss.append(total_los.item())
+        policy_loss.append(policy_los.item())
+        vf_loss.append(vf_los.item())
+        entropy.append(entrop.item())
+        
          # print the status after every VISUALIZE_STEP episodes
         if episode % VISUALIZE_STEP == 0 and episode > 0:
             print('Episode {}\tAverage Score: {:.2f}'.format(
@@ -235,6 +255,33 @@ def batch_and_train(env):
             # if np.mean(score[-100:-1]) > 195:
             #     break
 
+    # Create graphs
+    EXPERIMENT_NAME = datetime.datetime.now()
+
+    score = np.array(score)
+    avg_score = running_average(score, 100)
+    plt.figure(figsize=(15, 7))
+    plt.ylabel("Episodic Reward", fontsize=12)
+    plt.xlabel("Training Episodes", fontsize=12)
+    plt.plot(score, color='gray', linewidth=1)
+    plt.plot(avg_score, color='blue', linewidth=3)
+    plt.scatter(np.arange(score.shape[0]), score, color='green', linewidth=0.3)
+    plt.legend()
+
+    plt.savefig(f"img/{EXPERIMENT_NAME}_reward.png")
+
+
+
+    plt.figure(figsize=(15, 7))
+    plt.ylabel("Episodic loss", fontsize=12)
+    plt.xlabel("Training Episodes", fontsize=12)
+    plt.plot(total_loss, color='green', label='total loss', linewidth=1)
+    plt.plot(policy_loss, color='red', label='policy loss', linewidth=1)
+    plt.plot(vf_loss, color='blue', label='vf loss', linewidth=1)
+    plt.plot(entropy, color='magenta', label='entropy', linewidth=1)
+    plt.legend()
+
+    plt.savefig(f"img/{EXPERIMENT_NAME}_loss.png")
 
 if __name__ == '__main__':
     env = gym.make('CartPole-v1')
