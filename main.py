@@ -11,7 +11,11 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union, Callable
+import warnings
+# pylint: disable=no-member
+
+Schedule = Callable[[float], float]
 
 
 def running_average(x, n):
@@ -88,30 +92,6 @@ class Model(nn.Module):
 
         return policy_act, policy_probs, vf_reward
 
-    def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        """
-        Evaluate actoins according to the current policy,
-        given the observations.
-
-        AT THE MOMENT ONLY FOR CATEGORICAL DISTRIBUTIONS!
-
-        Args:
-            obs: observation
-            actions: actions
-
-        Return:
-            eestimated value, log likelihood fo taking those actions and entropy of the action distribution.
-        
-        Inspired by https://github.com/DLR-RM/stable-baselines3/blob/9aff1137a9e2efef8f6174ac6faeb8af7e173b64/stable_baselines3/common/policies.py#L671
-        """
-        # Preprocess the observation if needed
-        latent_pi, values = self.forward(observation=obs)
-        distribution = torch.distributions.Categorical(latent_pi)
-        log_prob = distribution.log_prob(actions)
-        entropy = distribution.entropy()
-
-        return values, log_prob, entropy
-
 
     def safe_ratio(self, num, den):
         """
@@ -122,35 +102,36 @@ class Model(nn.Module):
         return num / (den + 1e-10) * (torch.abs(den) > 0)
 
 
-def learn(self, observation, policy_act, policy_prob, vf_reward, reward,
-              iteration, batch_size):
+    def train(self, observation, policy_act, policy_prob, vf_reward, reward,
+                iteration, batch_size = 0):
         """
-        GAE + PPO LOSS w/clip, entropy and vf_loss;
-        entropy is with mean, not sum bf of different batch sizes.
+            GAE + PPO LOSS w/clip, entropy and vf_loss;
+            entropy is with mean, not sum bf of different batch sizes.
         """
-        approx_kl_divs = []
-        
+
         # Do a complete pass on the rollout buffer (batch)
 
-        # # GAE Constants:
-        # gae_gamma = 0.99
-        # gae_lambda = 0.95
+        # GAE Constants:
+        gae_gamma = 0.99
+        gae_lambda = 0.95
 
-        # # PPO Hyperparamters:
-        # policy_clip = 0.2
-        # c1 = 1
-        # c2 = 0.01
+        # PPO Hyperparamters:
+        policy_clip = 0.2
+        c1 = 1
+        c2 = 0.01
 
-        # new_policy_act, new_policy_prob, new_vf_reward = [], [], []
+        new_policy_act, new_policy_prob, new_vf_reward = [], [], []
 
-        # # 1. Get new policy FORWARD results
-        # for obs in observation:
-        #     pa, pp, vfr = self.predict(observation=torch.tensor(obs))
-        #     new_policy_act.append(pa)
-        #     new_policy_prob.append(pp)
-        #     new_vf_reward.append(vfr)
+        # 1. Get new policy FORWARD results
+        for obs in observation:
+            pa, pp, vfr = self.predict(observation=torch.tensor(obs))
+            new_policy_act.append(pa)
+            new_policy_prob.append(pp)
+            new_vf_reward.append(vfr)
 
-        # # 2. Calculate GAE
+        # 2. Calculate GAE
+        
+        ### OLD
         # deltas = [
         #     r + gae_gamma * nv - v
         #     for r, nv, v in zip(reward, new_vf_reward, vf_reward)
@@ -168,64 +149,64 @@ def learn(self, observation, policy_act, policy_prob, vf_reward, reward,
         # deltas = (deltas - deltas.mean()) / (deltas.std() + 1e-8)
         # advantage = torch.squeeze(deltas)
 
-        # # 3. Policy loss
+        # 3. Policy loss
 
-        # ## Get policy_prob and new_policy_prob for action taken in policy_act with policy_prob probabilities.
-        # policy_a = []
-        # new_policy_a = []
-        # for policy, new_policy, action in zip(policy_prob, new_policy_prob,
-        #                                       policy_act):
-        #     """
-        #     We don't have problems with action mask 'nones' because it's always the same, so it's impossibile
-        #     having a smth/0 or smth/-inf or smth like this.
-        #     """
-        #     policy_a.append(torch.squeeze(policy)[action])
-        #     new_policy_a.append(torch.squeeze(new_policy)[action])
+        ## Get policy_prob and new_policy_prob for action taken in policy_act with policy_prob probabilities.
+        policy_a = []
+        new_policy_a = []
+        for policy, new_policy, action in zip(policy_prob, new_policy_prob,
+                                            policy_act):
+            """
+            We don't have problems with action mask 'nones' because it's always the same, so it's impossibile
+            having a smth/0 or smth/-inf or smth like this.
+            """
+            policy_a.append(torch.squeeze(policy)[action])
+            new_policy_a.append(torch.squeeze(new_policy)[action])
 
-        # policy_prob = torch.tensor(policy_a)
-        # new_policy_prob = torch.tensor(new_policy_a)
+        policy_prob = torch.tensor(policy_a)
+        new_policy_prob = torch.tensor(new_policy_a)
 
-        # ## Calculate probability ratio
-        # ## PAPER: (6-)
-        # prob_ratio = self.safe_ratio(new_policy_prob, policy_prob)
+        ## Calculate probability ratio
+        ## PAPER: (6-)
+        prob_ratio = self.safe_ratio(new_policy_prob, policy_prob)
 
-        # ## Calcualte first argument of L_CLIP ( r_t(\theta)*\hat{A_t})
-        # ## PAPER: (6) \hat{E_t} excluded
-        # weighted_probs = advantage * prob_ratio
-        # ## PAPER: (7) -> only clip part
-        # weighted_clipped_probs = torch.clamp(prob_ratio, 1 - policy_clip,
-        #                                      1 + policy_clip)
-        # ## PAPER: (7) L_CLIP
-        # policy_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
+        ## Calcualte first argument of L_CLIP ( r_t(\theta)*\hat{A_t})
+        ## PAPER: (6) \hat{E_t} excluded
+        weighted_probs = advantage * prob_ratio
+        ## PAPER: (7) -> only clip part
+        weighted_clipped_probs = torch.clamp(prob_ratio, 1 - policy_clip,
+                                            1 + policy_clip)
+        ## PAPER: (7) L_CLIP
+        policy_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
-        # # 4. Value function loss
-        # ## PAPER: (9), L_t^{VF}
-        # # target = notnormalized_deltas + torch.tensor(vf_reward)
-        # # vf_loss = torch.nn.functional.mse_loss(target, torch.tensor(new_vf_reward))
-        # vf_loss = torch.nn.functional.mse_loss(torch.tensor(new_vf_reward),
-        #                                        torch.tensor(vf_reward))
+        # 4. Value function loss
+        ## PAPER: (9), L_t^{VF}
+        # target = notnormalized_deltas + torch.tensor(vf_reward)
+        # vf_loss = torch.nn.functional.mse_loss(target, torch.tensor(new_vf_reward))
+        vf_loss = torch.nn.functional.mse_loss(torch.tensor(new_vf_reward),
+                                            torch.tensor(vf_reward))
 
-        # # 5. Entropy
-        # ## PAPER: (9), S_t
-        # ## Shannon entropy where SUM -> MEAN so that it doesn't depend on "batch size"
-        # ## FIXME: 1e-10 ?
-        # entropy = -(new_policy_prob * torch.log(new_policy_prob + 1e-10))
-        # entropy = torch.mean(entropy)
+        # 5. Entropy
+        ## PAPER: (9), S_t
+        ## Shannon entropy where SUM -> MEAN so that it doesn't depend on "batch size"
+        ## FIXME: 1e-10 ?
+        entropy = -(new_policy_prob * torch.log(new_policy_prob + 1e-10))
+        entropy = torch.mean(entropy)
 
-        # # 6. Total Loss
-        # ## PAPER: (9)
-        # ## Inverted sign because torch.optimizer.Adam is a SGD and we need a SGA, so if we invert the sign an SGD works correctly
-        # total_loss = policy_loss + c1 * vf_loss + c2 * entropy
+        # 6. Total Loss
+        ## PAPER: (9)
+        ## Inverted sign because torch.optimizer.Adam is a SGD and we need a SGA, so if we invert the sign an SGD works correctly
+        total_loss = policy_loss + c1 * vf_loss + c2 * entropy
 
-        # if iteration % 100 == 0:
-        #     print(total_loss.item())
+        if iteration % 100 == 0:
+            print(total_loss.item())
 
-        # # 7. Backpropagation
-        # self.optimizer.zero_grad()
-        # total_loss.backward()
-        # self.optimizer.step()
+        # 7. Backpropagation
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
 
-        # return total_loss, policy_loss, vf_loss, entropy
+        return total_loss, policy_loss, vf_loss, entropy
 
 
 def batch_and_train(env):
@@ -260,7 +241,7 @@ def batch_and_train(env):
             # Run the episode for max `EPISODE_LENGTH` steps and register its data in the `episode_memory`
             # if the episode is `done` the batch is interrupted (and training continues)
             policy_act, policy_prob, vf_reward = model.predict(obs)
-            print(policy_act)
+            # print(policy_act)
             new_obs, rew, done, info = env.step(policy_act)
             episode_score += rew
 
@@ -278,7 +259,7 @@ def batch_and_train(env):
         score.append(episode_score)
 
         # Training
-        total_los, policy_los, vf_los, entrop = model.learn(
+        total_los, policy_los, vf_los, entrop = model.train(
             mem_observation, mem_policy_act, mem_policy_prob, mem_vf_reward,
             mem_reward, episode)
         # inside model.learn do gae and other stuff.
