@@ -5,28 +5,29 @@ import torch
 import gym
 import numpy as np
 
+
 # Define the network
 class ActorCritic(torch.nn.Module):
     def __init__(self, obs_dim, action_dim):
         super(ActorCritic, self).__init__()
 
         self.actor = torch.nn.Sequential(
-                            torch.nn.Linear(obs_dim , 64),
-                            torch.nn.Tanh(),
-                            torch.nn.Linear(64, 64),
-                            torch.nn.Tanh(),
-                            torch.nn.Linear(64, action_dim),
-                            torch.nn.Softmax(dim=-1)
-                        )
-        
+            torch.nn.Linear(obs_dim, 64),
+            torch.nn.Tanh(),
+            torch.nn.Linear(64, 64),
+            torch.nn.Tanh(),
+            torch.nn.Linear(64, action_dim),
+            torch.nn.Softmax(dim=-1),
+        )
+
         # critic
         self.critic = torch.nn.Sequential(
-                        torch.nn.Linear(obs_dim, 64),
-                        torch.nn.Tanh(),
-                        torch.nn.Linear(64, 64),
-                        torch.nn.Tanh(),
-                        torch.nn.Linear(64, 1)
-                    )
+            torch.nn.Linear(obs_dim, 64),
+            torch.nn.Tanh(),
+            torch.nn.Linear(64, 64),
+            torch.nn.Tanh(),
+            torch.nn.Linear(64, 1),
+        )
 
     def forward(self):
         raise NotImplementedError
@@ -68,17 +69,19 @@ class ActorCritic(torch.nn.Module):
 
         return action_logprobs, state_values, dist_entropy
 
+
 class RolloutBuffer:
     """
     Buffer used to store batched data
     """
+
     def __init__(self):
         self.actions = []
         self.states = []
         self.logprobs = []
         self.rewards = []
         self.is_terminals = []
-    
+
     def clear(self):
         del self.actions[:]
         del self.states[:]
@@ -86,42 +89,39 @@ class RolloutBuffer:
         del self.rewards[:]
         del self.is_terminals[:]
 
+
 class PPO:
-    def __init__(self, obs_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip):
+    def __init__(
+        self, obs_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip
+    ):
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
 
-        self.buffer = RolloutBuffer()
-
         self.policy = ActorCritic(obs_dim=obs_dim, action_dim=action_dim)
-        self.optimizer = torch.optim.Adam([
-            {'params': self.policy.actor.parameters(), 'lr': lr_actor},
-            {'params': self.policy.critic.parameters(), 'lr': lr_critic}
-            ])
-
-        self.policy_old = ActorCritic(obs_dim=obs_dim, action_dim=action_dim)
-        self.policy_old.load_state_dict(self.policy.state_dict())
+        self.optimizer = torch.optim.Adam(
+            [
+                {"params": self.policy.actor.parameters(), "lr": lr_actor},
+                {"params": self.policy.critic.parameters(), "lr": lr_critic},
+            ]
+        )
 
         self.MseLoss = torch.nn.MSELoss()
 
     def select_action(self, obs):
         with torch.no_grad():
-            obs = torch.FloatTensor(obs) # to device
-            action, action_logprob = self.policy_old.act(obs=obs)
-        
-        self.buffer.states.append(obs)
-        self.buffer.actions.append(action)
-        self.buffer.logprobs.append(action_logprob)
+            action, action_logprob = self.policy.act(obs=obs)
 
-        return action # .item()
+        return action, action_logprob
 
-    def update(self):
+    def update(self, buffer: RolloutBuffer):
         # Monte Carlo estimate of returns
         rewards = []
         discounted_reward = 0
 
-        for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
+        for reward, is_terminal in zip(
+            reversed(buffer.rewards), reversed(buffer.is_terminals)
+        ):
             if is_terminal:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma * discounted_reward)
@@ -132,14 +132,16 @@ class PPO:
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
 
         # convert list to tensor
-        old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach()
-        old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach()
-        old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach()
+        old_states = torch.squeeze(torch.stack(buffer.states, dim=0)).detach()
+        old_actions = torch.squeeze(torch.stack(buffer.actions, dim=0)).detach()
+        old_logprobs = torch.squeeze(torch.stack(buffer.logprobs, dim=0)).detach()
 
         # Optimize policy for K epochs
         for _ in range(self.K_epochs):
             # Evaluating old actions and values
-            logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
+            logprobs, state_values, dist_entropy = self.policy.evaluate(
+                old_states, old_actions
+            )
 
             # match state_values tensor dimensions with rewards tensor
             state_values = torch.squeeze(state_values)
@@ -150,21 +152,22 @@ class PPO:
             # Finding Surrogate Loss
             advantages = rewards - state_values.detach()
             surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
+            surr2 = (
+                torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+            )
 
             # final loss of clipped objective PPO
-            loss = -torch.min(surr1, surr2) + 0.5*self.MseLoss(state_values, rewards) - 0.01*dist_entropy
+            loss = (
+                -torch.min(surr1, surr2)
+                + 0.5 * self.MseLoss(state_values, rewards)
+                - 0.01 * dist_entropy
+            )
 
             # take gradient step
             self.optimizer.zero_grad()
             loss.mean().backward()
             self.optimizer.step()
 
-        # Copy new weights into old policy
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-        # Clear buffer
-        self.buffer.clear()
 
 def train():
     '''
@@ -175,28 +178,24 @@ def train():
      {======|_|~~~~~~~~~|
     /oO--000'"`-OO---OO-'
     '''
-    max_ep_len = 1000                   # max timesteps in one episode
-    max_training_timesteps = int(3e6)   # break training loop if timeteps > max_training_timesteps
-
-    print_freq = max_ep_len * 10        # print avg reward in the interval (in num timesteps)
-    log_freq = max_ep_len * 2           # log avg reward in the interval (in num timesteps)
+    max_ep_len = 1000  # max timesteps in one episode
 
     ## HYPERPARAMs
-    update_timestep = max_ep_len * 4      # update policy every n timesteps
-    K_epochs = 80               # update policy for K epochs in one PPO update
+    update_timestep = max_ep_len * 4  # update policy every n timesteps
+    K_epochs = 80  # update policy for K epochs in one PPO update
 
-    eps_clip = 0.2          # clip parameter for PPO
-    gamma = 0.99            # discount factor
+    eps_clip = 0.2  # clip parameter for PPO
+    gamma = 0.99  # discount factor
 
-    lr_actor = 0.0003       # learning rate for actor network
-    lr_critic = 0.001       # learning rate for critic network
+    lr_actor = 0.0003  # learning rate for actor network
+    lr_critic = 0.001  # learning rate for critic network
 
-    random_seed = 2         # set random seed if required (0 = no random seed)
+    random_seed = 2  # set random seed if required (0 = no random seed)
     # FIXME: missing c1, c2
     ## HYPERPARAMs
 
-    env = gym.make('CartPole-v1')
-    
+    env = gym.make("CartPole-v1")
+
     # state space dimension
     state_dim = env.observation_space.shape[0]
 
@@ -208,60 +207,54 @@ def train():
         env.seed(random_seed)
         np.random.seed(random_seed)
 
-    ppo_agent = PPO(state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip)
+    ppo_agent = PPO(
+        state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip
+    )
 
-    # logging bad way
-    print_running_reward = 0
-    print_running_episodes = 0
+    buffer = RolloutBuffer()
 
-    log_running_reward = 0
-    log_running_episodes = 0
-
-    time_step = 0
     i_episode = 0
+    epochs = 1000
+    batch_size = 1000
 
-    # training loop
-    while time_step <= max_training_timesteps:
+    epoch = 0
+    while epoch < epochs:
+        state = torch.FloatTensor(env.reset())
+        total_rew = 0
+        i_episode = 0
+        batch = 0
+        # batching
 
-        state = env.reset()
-        current_ep_reward = 0
+        while batch < batch_size:
 
-        for t in range(1, max_ep_len+1):
             # select action with policy
-            action = ppo_agent.select_action(state)
+            action, action_logprob = ppo_agent.select_action(state)
+
+            buffer.states.append(state)
+            buffer.actions.append(action)
+            buffer.logprobs.append(action_logprob)
+
             state, reward, done, _ = env.step(action)
-
+            state = torch.FloatTensor(state)
             # Saving reward and is_terminals
-            ppo_agent.buffer.rewards.append(reward)
-            ppo_agent.buffer.is_terminals.append(done)
+            buffer.rewards.append(reward)
+            buffer.is_terminals.append(done)
 
-            time_step += 1
-            current_ep_reward += reward
+            batch += 1
+            total_rew += 1
 
-            if time_step % update_timestep == 0:
-                ppo_agent.update()
+            if done:
+                state = torch.FloatTensor(env.reset())
+                i_episode += 1
 
-            if time_step % print_freq == 0:
-                print_avg_reward = print_running_reward / print_running_episodes
-                print_avg_reward = round(print_avg_reward,2)
+        epoch += 1
 
-                print(f"Episode : {i_episode} \t\t Timestep : {time_step} \t\t Average Reward : {print_avg_reward}")
+        print(f"EPOCH {epoch}, AVG: {total_rew/i_episode}")
+        ppo_agent.update(buffer)
+        buffer.clear()
 
-                print_running_reward = 0
-                print_running_episodes = 0
-
-            if done: 
-                break
-        
-        print_running_reward += current_ep_reward
-        print_running_episodes += 1
-
-        log_running_reward += current_ep_reward
-        log_running_episodes += 1
-
-        i_episode += 1
-    
     env.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     train()
