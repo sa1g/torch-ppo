@@ -92,8 +92,6 @@ class PPO:
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
 
-        self.buffer = RolloutBuffer()
-
         self.policy = ActorCritic(obs_dim=obs_dim, action_dim=action_dim)
         self.optimizer = torch.optim.Adam([
             {'params': self.policy.actor.parameters(), 'lr': lr_actor},
@@ -104,21 +102,16 @@ class PPO:
 
     def select_action(self, obs):
         with torch.no_grad():
-            obs = torch.FloatTensor(obs) # to device
             action, action_logprob = self.policy.act(obs=obs)
-        
-        self.buffer.states.append(obs)
-        self.buffer.actions.append(action)
-        self.buffer.logprobs.append(action_logprob)
 
-        return action # .item()
+        return action, action_logprob
 
-    def update(self):
+    def update(self, buffer:RolloutBuffer):
         # Monte Carlo estimate of returns
         rewards = []
         discounted_reward = 0
 
-        for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
+        for reward, is_terminal in zip(reversed(buffer.rewards), reversed(buffer.is_terminals)):
             if is_terminal:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma * discounted_reward)
@@ -129,9 +122,9 @@ class PPO:
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
 
         # convert list to tensor
-        old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach()
-        old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach()
-        old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach()
+        old_states = torch.squeeze(torch.stack(buffer.states, dim=0)).detach()
+        old_actions = torch.squeeze(torch.stack(buffer.actions, dim=0)).detach()
+        old_logprobs = torch.squeeze(torch.stack(buffer.logprobs, dim=0)).detach()
 
         # Optimize policy for K epochs
         for _ in range(self.K_epochs):
@@ -157,8 +150,6 @@ class PPO:
             loss.mean().backward()
             self.optimizer.step()
 
-        # Clear buffer
-        self.buffer.clear()
 
 def train():
     '''
@@ -214,26 +205,34 @@ def train():
     time_step = 0
     i_episode = 0
 
+    buffer = RolloutBuffer()
+    
     # training loop
     while time_step <= max_training_timesteps:
 
-        state = env.reset()
+        state = torch.FloatTensor(env.reset())
         current_ep_reward = 0
 
         for t in range(1, max_ep_len+1):
             # select action with policy
-            action = ppo_agent.select_action(state)
-            state, reward, done, _ = env.step(action)
+            action, action_logprob = ppo_agent.select_action(state)
 
+            buffer.states.append(state)
+            buffer.actions.append(action)
+            buffer.logprobs.append(action_logprob)
+
+            state, reward, done, _ = env.step(action)
+            state = torch.FloatTensor(state)
             # Saving reward and is_terminals
-            ppo_agent.buffer.rewards.append(reward)
-            ppo_agent.buffer.is_terminals.append(done)
+            buffer.rewards.append(reward)
+            buffer.is_terminals.append(done)
 
             time_step += 1
             current_ep_reward += reward
 
             if time_step % update_timestep == 0:
-                ppo_agent.update()
+                ppo_agent.update(buffer)
+                buffer.clear()
 
             if time_step % print_freq == 0:
                 print_avg_reward = print_running_reward / print_running_episodes
