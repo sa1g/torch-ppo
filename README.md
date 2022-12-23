@@ -1,10 +1,9 @@
 # torch-ppo
-Multiple implementations of PPO using `CartPole-v1` and a simple Actor-Critic model.
-Instead of GAE this implementation works with Monte-Carlo Estimation.
+Multiple implementations of PPO using `CartPole-v1` and a simple actor-critic model
+Instead of GAE, this implementation works with Monte-Carlo estimation.
 
-Strongly inspired by [PPO-Pytorch](https://github.com/nikhilbarhate99/PPO-PyTorch)
+Inspired heavily by [PPO-Pytorch], (https://github.com/nikhilbarhate99/PPO-PyTorch)
 
-The simplet impementation is `simple_ppo/ppo.py`, code is well documented over there.
+The simplest implementation is `simple_ppo/ppo.py,` and the code is well documented over there.
 
-The project also manages Multi-Agent environments. The selected env is a custom made `CartPole-v1` wrapper with multiple instances of the env. This solutin is extemely simple, a more complex one can be found at: TODO ADD OTHER PROJECT OF MINE
-
+The project also manages multi-agent environments. The chosen environment is a custom "CartPole-v1" wrapper that contains multiple instances of the environment. This solution is extremely simple; a more complex one can be found at: To Do: Add Another Project of Mine
