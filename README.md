@@ -6,6 +6,5 @@ Strongly inspired by [PPO-Pytorch](https://github.com/nikhilbarhate99/PPO-PyTorc
 
 The simplet impementation is `simple_ppo/ppo.py`, code is well documented over there.
 
-This repo also manages Multi-Agent environments. The selected env is a custom made `CartPole-v1` wrapper with multiple instances of the env.
+The project also manages Multi-Agent environments. The selected env is a custom made `CartPole-v1` wrapper with multiple instances of the env. This solutin is extemely simple, a more complex one can be found at: TODO ADD OTHER PROJECT OF MINE
 
-# TODO: add stuff to README.md
